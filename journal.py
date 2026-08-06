@@ -55,10 +55,11 @@ def _open_ws(book, name):
 
 
 def _ensure_header(ws, existing):
-    """Гарантирует шапку A:I и подписи средних в K:L. Возвращает existing (с шапкой)."""
+    """Гарантирует актуальную шапку A:I и подписи средних в K:L. Если на листе старая
+    разметка (напр. без колонок «Сбер 585 прод.»/«Разница» или со сводкой в I/J) —
+    переписывает шапку и чистит старую сводку из колонки J. Возвращает existing."""
     head = existing[0] if existing else []
-    ok = head and (head[0].strip().lower() == "дата") and len(head) >= 9
-    if not ok:
+    if [str(c).strip() for c in head[:9]] != HEADER:
         if ws.col_count < 12:
             ws.add_cols(12 - ws.col_count)
         ws.update(values=[HEADER], range_name="A1:I1", value_input_option="USER_ENTERED")
@@ -67,7 +68,14 @@ def _ensure_header(ws, existing):
                           ["Ср. курс продажи, ₽/г", ""]],
                   range_name="K1:L2", value_input_option="USER_ENTERED")
         ws.format("K1:L2", _CENTER)
-        return [HEADER]
+        try:
+            ws.batch_clear(["J1:J2"])   # убрать старую сводку прежней разметки
+        except Exception:
+            pass
+        if not existing:
+            return [HEADER]
+        existing[0] = list(HEADER)
+        return existing
     return existing
 
 
