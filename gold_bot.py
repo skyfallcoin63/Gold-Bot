@@ -287,20 +287,26 @@ async def deal_price(m: Message, state: FSMContext):
     await state.clear()
     kind, w = data.get("kind", "Покупка"), data.get("weight", 0)
     await m.answer("Записываю…")
-    cbr999 = await asyncio.to_thread(_safe_cbr_gold)
+    manual = _load_json(SBER_FILE)
+    r = await asyncio.to_thread(rates.build_rates, manual)   # ЦБ 999 + Сбер 585 прод. на дату сделки
+    cbr999 = r.get("gold999") or ""
+    sber_sell585 = r.get("sber_sell585")
     try:
-        res = await asyncio.to_thread(journal.append_deal, kind, w, p, cbr999)
+        res = await asyncio.to_thread(journal.append_deal, kind, w, p, cbr999, sber_sell585)
     except Exception as e:
         return await m.answer(f"⚠️ Не удалось записать в журнал: {e}\n"
                               f"Проверь JOURNAL_BOOK_ID и доступ сервис-аккаунта.",
                               reply_markup=MAIN_KB)
     ab = f"{res['avg_buy']:.0f}" if res["avg_buy"] is not None else "—"
     as_ = f"{res['avg_sell']:.0f}" if res["avg_sell"] is not None else "—"
+    sber_txt = f"{sber_sell585:.0f}" if sber_sell585 else "—"
+    diff_txt = f"{res['diff']:.0f}" if isinstance(res.get("diff"), (int, float)) else "—"
     emoji = "🟢" if kind == "Покупка" else "🔴"
     await m.answer(
         f"{emoji} <b>{kind} записана.</b>\n"
         f"Вес: {w:g} г × {p:.0f} ₽/г = <b>{res['summ']:.0f} ₽</b>\n"
-        f"ЦБ 999 на сегодня: {cbr999 or '—'} ₽/г\n\n"
+        f"ЦБ 999: {cbr999 or '—'} ₽/г · Сбер 585 прод.: {sber_txt} ₽/г\n"
+        f"Разница (Сбер 585 − цена): <b>{diff_txt}</b> ₽/г\n\n"
         f"📊 Средний курс: покупка <b>{ab}</b> / продажа <b>{as_}</b> ₽/г",
         reply_markup=MAIN_KB)
 
