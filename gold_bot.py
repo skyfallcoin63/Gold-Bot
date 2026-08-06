@@ -1,0 +1,318 @@
+"""Золотой бот (aiogram v3): курс ЦБ/Сбербанк в закрепе группы, новости про драгметаллы,
+журнал сделок в Google Sheets по кнопкам.
+
+Маркер версии: GOLD-BOT v1
+Модули: rates.py (курсы), news.py (RSS-новости), journal.py (журнал сделок).
+
+Режимы:
+  🟡 Курс сейчас         — показать текущий курс (ЦБ доллар/999 + Сбер) в личке
+  🟢 Купить / 🔴 Продать — внести сделку: вес -> цена/г -> запись в журнал + средние
+  🏦 Курс Сбера (ручной) — запасной ввод курса Сбера, если автоподтяжка с зеркала не удалась
+  📌 Обновить закреп      — пересобрать закреплённое сообщение в группе вручную
+  📰 Новости сейчас       — разово запостить свежие новости в группу
+Автоматика: закреп раз в день (config.PIN_HOUR), новости каждые config.NEWS_INTERVAL_HOURS.
+"""
+import asyncio
+import datetime as dt
+import json
+import logging
+from pathlib import Path
+
+from aiogram import Bot, Dispatcher, F
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
+from aiogram.filters import Command, CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import StatesGroup, State
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
+
+import config
+import journal
+import news
+import rates
+
+logging.basicConfig(level=logging.INFO)
+dp = Dispatcher(storage=MemoryStorage())
+
+STATE_DIR = Path(__file__).resolve().parent / "state"
+PIN_FILE = STATE_DIR / "pin.json"
+SBER_FILE = STATE_DIR / "sber_manual.json"
+NEWS_SEEN = str(STATE_DIR / "news_seen.json")
+
+MAIN_KB = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🟡 Курс сейчас")],
+        [KeyboardButton(text="🟢 Купить"), KeyboardButton(text="🔴 Продать")],
+        [KeyboardButton(text="🏦 Курс Сбера (ручной)"), KeyboardButton(text="📌 Обновить закреп")],
+        [KeyboardButton(text="📰 Новости сейчас")],
+    ],
+    resize_keyboard=True,
+)
+
+CANCEL_WORDS = {"отмена", "/cancel", "стоп", "/stop"}
+
+
+class DealForm(StatesGroup):
+    waiting_weight = State()
+    waiting_price = State()
+
+
+class SberForm(StatesGroup):
+    waiting_values = State()
+
+
+# ---------------- утилиты ----------------
+def _load_json(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _save_json(path, data):
+    STATE_DIR.mkdir(exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False)
+
+
+def is_admin(uid):
+    ids = getattr(config, "ADMIN_IDS", []) or []
+    return not ids or uid in ids
+
+
+def parse_num(text):
+    if not text:
+        return None
+    s = text.replace("\xa0", "").replace(" ", "").replace(",", ".").strip()
+    try:
+        v = float(s)
+        return v if v > 0 else None
+    except ValueError:
+        return None
+
+
+def _safe_cbr_gold():
+    try:
+        g = rates.fetch_cbr_gold()
+        return g["price999"] if g else ""
+    except Exception:
+        return ""
+
+
+# ---------------- закреп ----------------
+async def update_pin(bot):
+    """Пересобирает и обновляет закреплённое сообщение в группе. Редактирует существующее,
+    иначе шлёт новое и закрепляет. Возвращает message_id или None."""
+    gid = getattr(config, "GROUP_CHAT_ID", 0)
+    if not gid:
+        return None
+    manual = _load_json(SBER_FILE)
+    r = await asyncio.to_thread(rates.build_rates, manual)
+    text = rates.render_pin(r)
+
+    pin = _load_json(PIN_FILE) or {}
+    mid = pin.get("message_id")
+    if mid:
+        try:
+            await bot.edit_message_text(text, chat_id=gid, message_id=mid)
+            return mid
+        except Exception as e:
+            if "not modified" in str(e).lower():
+                return mid
+            # сообщение удалено/недоступно — отправим новое
+    msg = await bot.send_message(gid, text)
+    try:
+        await bot.pin_chat_message(gid, msg.message_id, disable_notification=True)
+    except Exception as e:
+        logging.warning("не удалось закрепить (бот не админ?): %s", e)
+    _save_json(PIN_FILE, {"message_id": msg.message_id})
+    return msg.message_id
+
+
+# ---------------- новости ----------------
+async def news_cycle(bot):
+    gid = getattr(config, "GROUP_CHAT_ID", 0)
+    if not gid:
+        return 0
+    items = await asyncio.to_thread(
+        news.select_new, config.NEWS_RSS, config.NEWS_KEYWORDS,
+        NEWS_SEEN, config.NEWS_MAX_PER_CYCLE)
+    for it in items:
+        try:
+            await bot.send_message(gid, news.format_news(it, config.NEWS_CTA))
+        except Exception as e:
+            logging.warning("не отправил новость: %s", e)
+        await asyncio.sleep(1)
+    return len(items)
+
+
+# ---------------- планировщики ----------------
+async def daily_pin_loop(bot):
+    while True:
+        now = dt.datetime.now()
+        target = now.replace(hour=getattr(config, "PIN_HOUR", 10), minute=0, second=0, microsecond=0)
+        if target <= now:
+            target += dt.timedelta(days=1)
+        await asyncio.sleep((target - now).total_seconds())
+        try:
+            await update_pin(bot)
+        except Exception as e:
+            logging.exception("daily_pin_loop: %s", e)
+
+
+async def news_loop(bot):
+    await asyncio.sleep(20)  # дать боту подняться
+    while True:
+        try:
+            await news_cycle(bot)
+        except Exception as e:
+            logging.exception("news_loop: %s", e)
+        await asyncio.sleep(getattr(config, "NEWS_INTERVAL_HOURS", 4) * 3600)
+
+
+# ---------------- хендлеры ----------------
+@dp.message(CommandStart())
+async def start(m: Message, state: FSMContext):
+    await state.clear()
+    await m.answer("🟡 Золотой бот на связи. Выбери действие:", reply_markup=MAIN_KB)
+
+
+@dp.message(Command("id"))
+async def cmd_id(m: Message):
+    await m.answer(f"chat_id: <code>{m.chat.id}</code>\ntype: {m.chat.type}\n"
+                   f"твой id: <code>{m.from_user.id}</code>")
+
+
+@dp.message(F.text == "🟡 Курс сейчас", F.chat.type == "private")
+async def show_rates(m: Message):
+    await m.answer("Считаю курс…")
+    manual = _load_json(SBER_FILE)
+    r = await asyncio.to_thread(rates.build_rates, manual)
+    await m.answer(rates.render_pin(r))
+
+
+@dp.message(F.text == "📌 Обновить закреп", F.chat.type == "private")
+async def force_pin(m: Message):
+    if not is_admin(m.from_user.id):
+        return await m.answer("Только для владельца.")
+    if not getattr(config, "GROUP_CHAT_ID", 0):
+        return await m.answer("Не задан GROUP_CHAT_ID в config.py (добавь бота в группу и пришли /id из неё).")
+    mid = await update_pin(m.bot)
+    await m.answer("📌 Закреп обновлён." if mid else "Не вышло обновить закреп.")
+
+
+@dp.message(F.text == "📰 Новости сейчас", F.chat.type == "private")
+async def force_news(m: Message):
+    if not is_admin(m.from_user.id):
+        return await m.answer("Только для владельца.")
+    if not getattr(config, "GROUP_CHAT_ID", 0):
+        return await m.answer("Не задан GROUP_CHAT_ID в config.py.")
+    n = await news_cycle(m.bot)
+    await m.answer(f"📰 Отправлено новостей: {n}" if n else "Новых новостей по драгметаллам нет.")
+
+
+# --- ручной курс Сбера ---
+@dp.message(F.text == "🏦 Курс Сбера (ручной)", F.chat.type == "private")
+async def sber_start(m: Message, state: FSMContext):
+    if not is_admin(m.from_user.id):
+        return await m.answer("Только для владельца.")
+    await state.set_state(SberForm.waiting_values)
+    await m.answer("Введи курс Сбера 999 двумя числами через пробел: <b>покупка продажа</b>\n"
+                   "Напр.: <code>10109 10743</code>\n(или «отмена»)")
+
+
+@dp.message(SberForm.waiting_values)
+async def sber_values(m: Message, state: FSMContext):
+    if (m.text or "").strip().lower() in CANCEL_WORDS:
+        await state.clear()
+        return await m.answer("Отменил.", reply_markup=MAIN_KB)
+    parts = (m.text or "").replace(",", ".").split()
+    nums = [parse_num(p) for p in parts]
+    nums = [n for n in nums if n]
+    if len(nums) < 2:
+        return await m.answer("Нужно два числа: покупка продажа. Напр.: 10109 10743")
+    buy, sell = min(nums[0], nums[1]), max(nums[0], nums[1])
+    _save_json(SBER_FILE, {"buy999": buy, "sell999": sell})
+    await state.clear()
+    await m.answer(f"✅ Курс Сбера сохранён (ручной): покупка {buy:.0f} / продажа {sell:.0f} ₽/г.\n"
+                   f"Будет использован в закрепе, если автоподтяжка не сработает.",
+                   reply_markup=MAIN_KB)
+
+
+# --- сделка: Купить / Продать ---
+@dp.message(F.text == "🟢 Купить", F.chat.type == "private")
+async def buy_start(m: Message, state: FSMContext):
+    if not is_admin(m.from_user.id):
+        return await m.answer("Только для владельца.")
+    await state.set_state(DealForm.waiting_weight)
+    await state.update_data(kind="Покупка")
+    await m.answer("🟢 <b>Покупка.</b> Введи вес в граммах (напр. 12.5). Или «отмена».")
+
+
+@dp.message(F.text == "🔴 Продать", F.chat.type == "private")
+async def sell_start(m: Message, state: FSMContext):
+    if not is_admin(m.from_user.id):
+        return await m.answer("Только для владельца.")
+    await state.set_state(DealForm.waiting_weight)
+    await state.update_data(kind="Продажа")
+    await m.answer("🔴 <b>Продажа.</b> Введи вес в граммах (напр. 12.5). Или «отмена».")
+
+
+@dp.message(DealForm.waiting_weight)
+async def deal_weight(m: Message, state: FSMContext):
+    if (m.text or "").strip().lower() in CANCEL_WORDS:
+        await state.clear()
+        return await m.answer("Отменил.", reply_markup=MAIN_KB)
+    w = parse_num(m.text)
+    if w is None:
+        return await m.answer("Не понял вес. Введи число грамм, напр. 12.5")
+    await state.update_data(weight=w)
+    await state.set_state(DealForm.waiting_price)
+    await m.answer(f"Вес {w:g} г. Теперь цена за грамм, ₽ (по которой идёт сделка):")
+
+
+@dp.message(DealForm.waiting_price)
+async def deal_price(m: Message, state: FSMContext):
+    if (m.text or "").strip().lower() in CANCEL_WORDS:
+        await state.clear()
+        return await m.answer("Отменил.", reply_markup=MAIN_KB)
+    p = parse_num(m.text)
+    if p is None:
+        return await m.answer("Не понял цену. Введи число ₽/г, напр. 3900")
+    data = await state.get_data()
+    await state.clear()
+    kind, w = data.get("kind", "Покупка"), data.get("weight", 0)
+    await m.answer("Записываю…")
+    cbr999 = await asyncio.to_thread(_safe_cbr_gold)
+    try:
+        res = await asyncio.to_thread(journal.append_deal, kind, w, p, cbr999)
+    except Exception as e:
+        return await m.answer(f"⚠️ Не удалось записать в журнал: {e}\n"
+                              f"Проверь JOURNAL_BOOK_ID и доступ сервис-аккаунта.",
+                              reply_markup=MAIN_KB)
+    ab = f"{res['avg_buy']:.0f}" if res["avg_buy"] is not None else "—"
+    as_ = f"{res['avg_sell']:.0f}" if res["avg_sell"] is not None else "—"
+    emoji = "🟢" if kind == "Покупка" else "🔴"
+    await m.answer(
+        f"{emoji} <b>{kind} записана.</b>\n"
+        f"Вес: {w:g} г × {p:.0f} ₽/г = <b>{res['summ']:.0f} ₽</b>\n"
+        f"ЦБ 999 на сегодня: {cbr999 or '—'} ₽/г\n\n"
+        f"📊 Средний курс: покупка <b>{ab}</b> / продажа <b>{as_}</b> ₽/г",
+        reply_markup=MAIN_KB)
+
+
+# ---------------- запуск ----------------
+async def main():
+    bot = Bot(token=config.TELEGRAM_BOT_TOKEN,
+              default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    await bot.delete_webhook(drop_pending_updates=True)
+    asyncio.create_task(daily_pin_loop(bot))
+    asyncio.create_task(news_loop(bot))
+    logging.info("GOLD-BOT v1 запущен")
+    await dp.start_polling(bot)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

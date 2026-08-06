@@ -1,0 +1,7 @@
+config.py
+google-key.json
+credentials.json
+venv/
+__pycache__/
+*.pyc
+state/
