@@ -191,19 +191,19 @@ def render_pin(r):
         d = dt.date.fromisoformat(d).strftime("%d.%m.%Y")
     except Exception:
         pass
-    lines = [f"🟡 <b>Золото — курс на {d}</b> (ЦБ РФ)", ""]
-    lines.append(f"💵 Доллар ЦБ: <b>{r['usd']:.2f} ₽</b>" if r["usd"] else "💵 Доллар ЦБ: н/д")
+    lines = [f"💵 <b>{r['usd']:.2f} ₽</b>" if r["usd"] else "💵 н/д"]
     g = _fmt_rub(r["gold999"])
     lines.append(f"🥇 999 (ЦБ): <b>{g} ₽/г</b>{_fmt_pct(r['gold999_pct'])}")
     if r["sber_source"]:
-        lines.append(f"🏦 Сбербанк 999: покупка <b>{_fmt_rub(r['sber_buy999'])}</b> / "
+        lines.append(f"🏦 Сбер 999: покупка <b>{_fmt_rub(r['sber_buy999'])}</b> / "
                      f"продажа <b>{_fmt_rub(r['sber_sell999'])}</b> ₽/г")
-        lines.append(f"🏦 Сбербанк 585: покупка <b>{_fmt_rub(r['sber_buy585'])}</b> / "
+        lines.append(f"🏦 Сбер 585: покупка <b>{_fmt_rub(r['sber_buy585'])}</b> / "
                      f"продажа <b>{_fmt_rub(r['sber_sell585'])}</b> ₽/г")
         if r["sber_source"] == "manual":
-            lines.append("<i>(курс Сбера — ручной ввод)</i>")
+            lines.append("<i>(Сбер — ручной ввод)</i>")
     else:
-        lines.append("🏦 Сбербанк: н/д (введите вручную кнопкой «🏦 Курс Сбера»)")
+        lines.append("🏦 Сбер: н/д (кнопка «🏦 Курс Сбера»)")
+    lines.append(f"<i>Курс на {d} (ЦБ РФ)</i>")
     return "\n".join(lines)
 
 
