@@ -102,11 +102,11 @@ def _safe_cbr_gold():
 
 
 # ---------------- закреп ----------------
-async def update_pin(bot):
-    """Пересобирает и обновляет закреплённое сообщение в группе. Редактирует существующее,
-    иначе шлёт новое и закрепляет. Возвращает message_id или None."""
-    gid = getattr(config, "GROUP_CHAT_ID", 0)
-    if not gid:
+async def update_pin(bot, chat_id):
+    """Пересобирает и обновляет закреплённое сообщение в чате chat_id (личка или группа).
+    Редактирует существующее (если оно в том же чате), иначе шлёт новое и закрепляет.
+    Возвращает message_id или None."""
+    if not chat_id:
         return None
     manual = _load_json(SBER_FILE)
     r = await asyncio.to_thread(rates.build_rates, manual)
@@ -114,20 +114,20 @@ async def update_pin(bot):
 
     pin = _load_json(PIN_FILE) or {}
     mid = pin.get("message_id")
-    if mid:
+    if mid and pin.get("chat_id") == chat_id:
         try:
-            await bot.edit_message_text(text, chat_id=gid, message_id=mid)
+            await bot.edit_message_text(text, chat_id=chat_id, message_id=mid)
             return mid
         except Exception as e:
             if "not modified" in str(e).lower():
                 return mid
             # сообщение удалено/недоступно — отправим новое
-    msg = await bot.send_message(gid, text)
+    msg = await bot.send_message(chat_id, text)
     try:
-        await bot.pin_chat_message(gid, msg.message_id, disable_notification=True)
+        await bot.pin_chat_message(chat_id, msg.message_id, disable_notification=True)
     except Exception as e:
-        logging.warning("не удалось закрепить (бот не админ?): %s", e)
-    _save_json(PIN_FILE, {"message_id": msg.message_id})
+        logging.warning("не удалось закрепить (нет прав в группе?): %s", e)
+    _save_json(PIN_FILE, {"chat_id": chat_id, "message_id": msg.message_id})
     return msg.message_id
 
 
@@ -157,7 +157,10 @@ async def daily_pin_loop(bot):
             target += dt.timedelta(days=1)
         await asyncio.sleep((target - now).total_seconds())
         try:
-            await update_pin(bot)
+            pin = _load_json(PIN_FILE) or {}
+            chat_id = pin.get("chat_id") or getattr(config, "GROUP_CHAT_ID", 0)
+            if chat_id:
+                await update_pin(bot, chat_id)
         except Exception as e:
             logging.exception("daily_pin_loop: %s", e)
 
@@ -197,10 +200,9 @@ async def show_rates(m: Message):
 async def force_pin(m: Message):
     if not is_admin(m.from_user.id):
         return await m.answer("Только для владельца.")
-    if not getattr(config, "GROUP_CHAT_ID", 0):
-        return await m.answer("Не задан GROUP_CHAT_ID в config.py (добавь бота в группу и пришли /id из неё).")
-    mid = await update_pin(m.bot)
-    await m.answer("📌 Закреп обновлён." if mid else "Не вышло обновить закреп.")
+    mid = await update_pin(m.bot, m.chat.id)   # закрепляем прямо здесь, в личке
+    await m.answer("📌 Курс обновлён и закреплён в этом чате." if mid
+                   else "Не вышло обновить закреп.")
 
 
 @dp.message(F.text == "📰 Новости сейчас", F.chat.type == "private")
