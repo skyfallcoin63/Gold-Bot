@@ -165,6 +165,7 @@ def build_rates(sber_manual=None):
         "sber_source": sber_source,
         "sber_buy999": (sber or {}).get("buy999"),
         "sber_sell999": (sber or {}).get("sell999"),
+        "sber_buy585": round((sber["buy999"] * PROBA_585), 2) if sber and sber.get("buy999") else None,
         "sber_sell585": round((sber["sell999"] * PROBA_585), 2) if sber and sber.get("sell999") else None,
     }
     return res
@@ -197,7 +198,8 @@ def render_pin(r):
     if r["sber_source"]:
         lines.append(f"🏦 Сбербанк 999: покупка <b>{_fmt_rub(r['sber_buy999'])}</b> / "
                      f"продажа <b>{_fmt_rub(r['sber_sell999'])}</b> ₽/г")
-        lines.append(f"🏦 Сбербанк 585: продажа <b>{_fmt_rub(r['sber_sell585'])}</b> ₽/г")
+        lines.append(f"🏦 Сбербанк 585: покупка <b>{_fmt_rub(r['sber_buy585'])}</b> / "
+                     f"продажа <b>{_fmt_rub(r['sber_sell585'])}</b> ₽/г")
         if r["sber_source"] == "manual":
             lines.append("<i>(курс Сбера — ручной ввод)</i>")
     else:
