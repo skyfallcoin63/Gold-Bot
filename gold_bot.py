@@ -44,7 +44,7 @@ PROFIT_RUB = int(getattr(config, "PROFIT_PER_GRAM", 500))   # надбавка �
 
 MAIN_KB = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="🟡 Курс сейчас")],
+        [KeyboardButton(text="🟡 Курс сейчас"), KeyboardButton(text="📈 Анализ рынка")],
         [KeyboardButton(text="🟢 Купить"), KeyboardButton(text="🔴 Продать")],
         [KeyboardButton(text="🧮 Разница с Сбером")],
         [KeyboardButton(text="🏦 Курс Сбера (ручной)"), KeyboardButton(text="📌 Обновить закреп")],
@@ -201,6 +201,16 @@ async def show_rates(m: Message):
     manual = _load_json(SBER_FILE)
     r = await asyncio.to_thread(rates.build_rates, manual)
     await m.answer(rates.render_pin(r))
+
+
+@dp.message(F.text == "📈 Анализ рынка", F.chat.type == "private")
+async def market(m: Message):
+    await m.answer("Анализирую рынок золота и серебра…")
+    try:
+        text = await asyncio.to_thread(rates.render_market)
+    except Exception as e:
+        return await m.answer(f"Не удалось получить данные ЦБ: {e}")
+    await m.answer(text)
 
 
 # --- калькулятор: разница с Сбером по введённой цене (без записи в журнал) ---

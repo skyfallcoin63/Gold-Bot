@@ -207,6 +207,112 @@ def render_pin(r):
     return "\n".join(lines)
 
 
+# ---------------- анализ рынка (золото + серебро, история ЦБ) ----------------
+METAL_CODES = {"gold": "1", "silver": "2"}   # коды металлов в xml_metall
+METAL_TITLE = {"gold": "🥇 Золото", "silver": "🥈 Серебро"}
+
+
+def parse_metal_series(xml_bytes, code):
+    """Из xml_metall достаёт ряд (date, price ₽/г) по коду металла, сортировка по дате."""
+    root = ET.fromstring(xml_bytes)
+    out = []
+    for rec in root.findall("Record"):
+        if rec.get("Code") != code:
+            continue
+        price = _num(rec.findtext("Buy"))
+        d = rec.get("Date")
+        if price is None or not d:
+            continue
+        try:
+            day = dt.datetime.strptime(d, "%d.%m.%Y").date()
+        except ValueError:
+            continue
+        out.append((day, price))
+    out.sort(key=lambda x: x[0])
+    return out
+
+
+def fetch_metals_history(days=180):
+    """Один запрос xml_metall за период -> {'gold': [...], 'silver': [...]}."""
+    today = dt.date.today()
+    d1 = (today - dt.timedelta(days=days)).strftime("%d/%m/%Y")
+    d2 = today.strftime("%d/%m/%Y")
+    r = requests.get(CBR_METALL, headers=UA, timeout=TIMEOUT,
+                     params={"date_req1": d1, "date_req2": d2})
+    r.raise_for_status()
+    xml = r.content
+    return {name: parse_metal_series(xml, code) for name, code in METAL_CODES.items()}
+
+
+def _pct(cur, old):
+    return round((cur - old) / old * 100, 1) if old else None
+
+
+def analyze_series(series, horizons=(7, 30, 90, 180)):
+    """Метрики по ряду: текущая цена, изменение за горизонты (%), диапазон и позиция в нём."""
+    if not series:
+        return None
+    last_date, cur = series[-1]
+
+    def ago(n):
+        target = last_date - dt.timedelta(days=n)
+        prev = None
+        for d, p in series:
+            if d <= target:
+                prev = p
+            else:
+                break
+        return prev
+
+    changes = {n: _pct(cur, ago(n)) for n in horizons}
+    lo = min(p for _, p in series)
+    hi = max(p for _, p in series)
+    pos = round((cur - lo) / (hi - lo) * 100) if hi > lo else 50
+    return {"cur": cur, "changes": changes, "lo": lo, "hi": hi, "pos": pos}
+
+
+def _market_block(title, a):
+    if not a:
+        return f"{title}: н/д"
+    ch = a["changes"]
+
+    def f(n):
+        v = ch.get(n)
+        return "—" if v is None else f"{v:+.1f}%"
+
+    t90 = ch.get(90) or 0
+    trend = "📈 рост" if t90 > 1 else ("📉 снижение" if t90 < -1 else "➡️ вбок")
+    if a["pos"] <= 33:
+        entry = "🟢 низ диапазона — исторически интереснее для закупа"
+    elif a["pos"] <= 66:
+        entry = "🟡 середина диапазона"
+    else:
+        entry = "🔴 верх диапазона — дорого, входить осторожно"
+    return (f"<b>{title}</b>\n"
+            f"Сейчас: <b>{_fmt_rub(a['cur'])} ₽/г</b>\n"
+            f"7д {f(7)} · 30д {f(30)} · 90д {f(90)} · 180д {f(180)}\n"
+            f"Диапазон 180д: {_fmt_rub(a['lo'])}–{_fmt_rub(a['hi'])} ₽/г, "
+            f"сейчас на {a['pos']}% от низа\n"
+            f"Тренд (90д): {trend}\n"
+            f"Точка входа: {entry}")
+
+
+def render_market(days=180):
+    """Текст «Анализ рынка» по золоту и серебру (999) на данных ЦБ за период."""
+    hist = fetch_metals_history(days)
+    g = analyze_series(hist.get("gold", []))
+    s = analyze_series(hist.get("silver", []))
+    parts = ["📊 <b>Анализ рынка</b> (ЦБ РФ, 999 проба, 180 дней)", "",
+             _market_block("🥇 Золото", g), "", _market_block("🥈 Серебро", s)]
+    if g and s and s["cur"]:
+        ratio = round(g["cur"] / s["cur"], 1)
+        parts += ["", f"⚖️ Золото/серебро: <b>{ratio}</b> "
+                      f"(чем выше — тем серебро относительно дешевле)"]
+    parts += ["", "<i>Это ориентир по историческим данным ЦБ, не прогноз и не финсовет. "
+                  "Лучшая точка входа не гарантируется — смотри на тренд и позицию в диапазоне.</i>"]
+    return "\n".join(parts)
+
+
 # ---------------- self-check (офлайн, на реальных образцах) ----------------
 if __name__ == "__main__":
     daily = (b'<?xml version="1.0" encoding="windows-1251"?>'
@@ -235,4 +341,18 @@ if __name__ == "__main__":
     print("✅ parse_cbr_usd:", parse_cbr_usd(daily), "₽")
     print("✅ parse_cbr_gold:", g[-1], "| изм. за день:", pct, "%")
     print("✅ parse_sber_html:", s, "| 585 продажа:", round(s["sell999"] * PROBA_585, 2))
+
+    # анализ рынка (синтетический ряд)
+    hist_xml = ('<?xml version="1.0" encoding="windows-1251"?><Metall>'
+                '<Record Date="01.02.2026" Code="1"><Buy>9000,00</Buy><Sell>9000,00</Sell></Record>'
+                '<Record Date="01.05.2026" Code="1"><Buy>10000,00</Buy><Sell>10000,00</Sell></Record>'
+                '<Record Date="06.08.2026" Code="1"><Buy>10500,00</Buy><Sell>10500,00</Sell></Record>'
+                '<Record Date="06.08.2026" Code="2"><Buy>150,00</Buy><Sell>150,00</Sell></Record>'
+                '</Metall>').encode("cp1251")
+    ser = parse_metal_series(hist_xml, "1")
+    a = analyze_series(ser, horizons=(90, 180))
+    assert a["cur"] == 10500.0 and a["lo"] == 9000.0 and a["hi"] == 10500.0, a
+    assert a["pos"] == 100, a           # текущая = максимум -> верх диапазона
+    assert a["changes"][90] == round((10500 - 10000) / 10000 * 100, 1), a
+    print("✅ analyze_series:", a)
     print("Все офлайн-проверки парсинга прошли.")
