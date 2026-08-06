@@ -40,6 +40,8 @@ PIN_FILE = STATE_DIR / "pin.json"
 SBER_FILE = STATE_DIR / "sber_manual.json"
 NEWS_SEEN = str(STATE_DIR / "news_seen.json")
 
+PROFIT_RUB = int(getattr(config, "PROFIT_PER_GRAM", 500))   # надбавка к закупу для цены продажи, ₽/г
+
 MAIN_KB = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🟡 Курс сейчас")],
@@ -344,13 +346,16 @@ async def deal_price(m: Message, state: FSMContext):
     sber_txt = f"{sber_sell585:.0f}" if sber_sell585 else "—"
     diff_txt = f"{res['diff']:.0f}" if isinstance(res.get("diff"), (int, float)) else "—"
     emoji = "🟢" if kind == "Покупка" else "🔴"
-    await m.answer(
-        f"{emoji} <b>{kind} записана.</b>\n"
-        f"Вес: {w:g} г × {p:.0f} ₽/г = <b>{res['summ']:.0f} ₽</b>\n"
-        f"ЦБ 999: {cbr999 or '—'} ₽/г · Сбер 585 прод.: {sber_txt} ₽/г\n"
-        f"Разница (Сбер 585 − цена): <b>{diff_txt}</b> ₽/г\n\n"
-        f"📊 Средний курс: покупка <b>{ab}</b> / продажа <b>{as_}</b> ₽/г",
-        reply_markup=MAIN_KB)
+    lines = [
+        f"{emoji} <b>{kind} записана.</b>",
+        f"Вес: {w:g} г × {p:.0f} ₽/г = <b>{res['summ']:.0f} ₽</b>",
+        f"ЦБ 999: {cbr999 or '—'} ₽/г · Сбер 585 прод.: {sber_txt} ₽/г",
+        f"Разница (Сбер 585 − цена): <b>{diff_txt}</b> ₽/г",
+    ]
+    if isinstance(res.get("sell"), (int, float)):
+        lines.append(f"💵 Цена продажи (закуп +{PROFIT_RUB}): <b>{res['sell']:.0f}</b> ₽/г")
+    lines += ["", f"📊 Средний курс: покупка <b>{ab}</b> / продажа <b>{as_}</b> ₽/г"]
+    await m.answer("\n".join(lines), reply_markup=MAIN_KB)
 
 
 # ---------------- запуск ----------------

@@ -12,6 +12,7 @@ ADMIN_IDS = []              # кто может вносить сделки (К�
 KEY_FILE = "google-key.json"   # ключ сервис-аккаунта postavki-bot@postavki-bot.iam.gserviceaccount.com
 JOURNAL_BOOK_ID = ""           # ID книги журнала (расшарить на сервис-аккаунт)
 JOURNAL_SHEET = "Журнал"
+PROFIT_PER_GRAM = 500          # надбавка к цене закупа для колонки «Цена продажи», ₽/г
 
 # --- Закреп ---
 PIN_HOUR = 10               # час (по времени сервера) ежедневного обновления закрепа
