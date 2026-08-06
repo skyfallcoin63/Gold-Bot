@@ -220,22 +220,22 @@ async def calc_price(m: Message, state: FSMContext):
     await state.clear()
     manual = _load_json(SBER_FILE)
     r = await asyncio.to_thread(rates.build_rates, manual)
-    buy585 = r.get("sber_buy585")
     sell585 = r.get("sber_sell585")
     if not sell585:
         return await m.answer("Курс Сбербанка сейчас недоступен. Введи его вручную кнопкой "
                               "«🏦 Курс Сбера (ручной)» и повтори.", reply_markup=MAIN_KB)
-    d_sell = sell585 - p
-    lines = [f"🧮 Твоя цена: <b>{p:.0f} ₽/г</b>",
-             f"🏦 Сбербанк 585: покупка {buy585:.0f} / продажа {sell585:.0f} ₽/г"
-             if buy585 else f"🏦 Сбербанк 585 продажа: {sell585:.0f} ₽/г",
-             "",
-             f"Разница с продажей Сбера: <b>{d_sell:+.0f} ₽/г</b> "
-             f"({'ниже' if d_sell > 0 else 'выше'} продажи Сбера)"]
-    if buy585:
-        d_buy = buy585 - p
-        lines.append(f"Разница с покупкой Сбера: <b>{d_buy:+.0f} ₽/г</b>")
-    await m.answer("\n".join(lines), reply_markup=MAIN_KB)
+    d = sell585 - p   # продажа Сбера (слиток) − твоя цена лома
+    if d > 0:
+        verdict = f"лом дешевле слитка Сбера на <b>{d:.0f} ₽/г</b> — выгоднее брать лом ✅"
+    elif d < 0:
+        verdict = f"лом дороже слитка Сбера на <b>{abs(d):.0f} ₽/г</b> — выгоднее купить слиток у Сбера"
+    else:
+        verdict = "цена равна продаже Сбера"
+    await m.answer(
+        f"🧮 Твоя цена (лом): <b>{p:.0f} ₽/г</b>\n"
+        f"🏦 Сбербанк 585 продажа (слиток): <b>{sell585:.0f} ₽/г</b>\n\n"
+        f"{verdict}",
+        reply_markup=MAIN_KB)
 
 
 @dp.message(F.text == "📌 Обновить закреп", F.chat.type == "private")
