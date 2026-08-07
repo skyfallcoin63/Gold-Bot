@@ -109,19 +109,26 @@ def _safe_cbr_gold():
 
 
 # ---------------- закреп ----------------
+def _load_pins():
+    """Словарь закрепов {str(chat_id): message_id}. Мигрирует старый формат {chat_id,message_id}."""
+    data = _load_json(PIN_FILE) or {}
+    if "message_id" in data and "chat_id" in data:      # старый одиночный формат
+        return {str(data["chat_id"]): data["message_id"]}
+    return {str(k): v for k, v in data.items()}
+
+
 async def update_pin(bot, chat_id):
-    """Пересобирает и обновляет закреплённое сообщение в чате chat_id (личка или группа).
-    Редактирует существующее (если оно в том же чате), иначе шлёт новое и закрепляет.
-    Возвращает message_id или None."""
+    """Обновляет (или создаёт+закрепляет) курс в чате chat_id. Помнит закреп по каждому чату,
+    поэтому закреп может жить сразу в личке и в группе. Возвращает message_id или None."""
     if not chat_id:
         return None
     manual = _load_json(SBER_FILE)
     r = await asyncio.to_thread(rates.build_rates, manual)
     text = rates.render_pin(r)
 
-    pin = _load_json(PIN_FILE) or {}
-    mid = pin.get("message_id")
-    if mid and pin.get("chat_id") == chat_id:
+    pins = _load_pins()
+    mid = pins.get(str(chat_id))
+    if mid:
         try:
             await bot.edit_message_text(text, chat_id=chat_id, message_id=mid)
             return mid
@@ -134,7 +141,8 @@ async def update_pin(bot, chat_id):
         await bot.pin_chat_message(chat_id, msg.message_id, disable_notification=True)
     except Exception as e:
         logging.warning("не удалось закрепить (нет прав в группе?): %s", e)
-    _save_json(PIN_FILE, {"chat_id": chat_id, "message_id": msg.message_id})
+    pins[str(chat_id)] = msg.message_id
+    _save_json(PIN_FILE, pins)
     return msg.message_id
 
 
@@ -164,9 +172,10 @@ async def daily_pin_loop(bot):
             target += dt.timedelta(days=1)
         await asyncio.sleep((target - now).total_seconds())
         try:
-            pin = _load_json(PIN_FILE) or {}
-            chat_id = pin.get("chat_id") or getattr(config, "GROUP_CHAT_ID", 0)
-            if chat_id:
+            targets = [int(c) for c in _load_pins().keys()]
+            if not targets and getattr(config, "GROUP_CHAT_ID", 0):
+                targets = [config.GROUP_CHAT_ID]
+            for chat_id in targets:
                 await update_pin(bot, chat_id)
         except Exception as e:
             logging.exception("daily_pin_loop: %s", e)
@@ -193,6 +202,16 @@ async def start(m: Message, state: FSMContext):
 async def cmd_id(m: Message):
     await m.answer(f"chat_id: <code>{m.chat.id}</code>\ntype: {m.chat.type}\n"
                    f"твой id: <code>{m.from_user.id}</code>")
+
+
+@dp.message(Command("zakrep"))
+async def cmd_zakrep(m: Message):
+    """Закрепить курс в текущем чате (работает и в группе: сделай бота админом с правом закрепа)."""
+    if not is_admin(m.from_user.id):
+        return await m.answer("Только для владельца.")
+    mid = await update_pin(m.bot, m.chat.id)
+    await m.answer("📌 Курс закреплён в этом чате, буду обновлять его каждый день." if mid
+                   else "Не вышло закрепить — проверь, что бот админ с правом закреплять сообщения.")
 
 
 @dp.message(F.text == "🟡 Курс сейчас", F.chat.type == "private")
