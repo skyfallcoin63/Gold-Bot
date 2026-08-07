@@ -46,8 +46,7 @@ MAIN_KB = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🟡 Курс сейчас"), KeyboardButton(text="📈 Анализ рынка")],
         [KeyboardButton(text="🟢 Купить"), KeyboardButton(text="🔴 Продать")],
-        [KeyboardButton(text="🧮 Разница с Сбером")],
-        [KeyboardButton(text="🏦 Курс Сбера (ручной)"), KeyboardButton(text="📌 Обновить закреп")],
+        [KeyboardButton(text="🧮 Разница с Сбером"), KeyboardButton(text="📌 Обновить закреп")],
         [KeyboardButton(text="📰 Новости сейчас")],
     ],
     resize_keyboard=True,
@@ -214,7 +213,7 @@ async def cmd_zakrep(m: Message):
                    else "Не вышло закрепить — проверь, что бот админ с правом закреплять сообщения.")
 
 
-@dp.message(F.text == "🟡 Курс сейчас", F.chat.type == "private")
+@dp.message(F.text == "🟡 Курс сейчас")
 async def show_rates(m: Message):
     await m.answer("Считаю курс…")
     manual = _load_json(SBER_FILE)
@@ -222,7 +221,7 @@ async def show_rates(m: Message):
     await m.answer(rates.render_pin(r))
 
 
-@dp.message(F.text == "📈 Анализ рынка", F.chat.type == "private")
+@dp.message(F.text == "📈 Анализ рынка")
 async def market(m: Message):
     await m.answer("Анализирую рынок золота и серебра…")
     try:
@@ -233,7 +232,7 @@ async def market(m: Message):
 
 
 # --- калькулятор: разница с Сбером по введённой цене (без записи в журнал) ---
-@dp.message(F.text == "🧮 Разница с Сбером", F.chat.type == "private")
+@dp.message(F.text == "🧮 Разница с Сбером")
 async def calc_start(m: Message, state: FSMContext):
     await state.set_state(CalcForm.waiting_price)
     await m.answer("🧮 Введи цену за грамм (₽/г), по которой хочешь купить — "
@@ -269,7 +268,7 @@ async def calc_price(m: Message, state: FSMContext):
         reply_markup=MAIN_KB)
 
 
-@dp.message(F.text == "📌 Обновить закреп", F.chat.type == "private")
+@dp.message(F.text == "📌 Обновить закреп")
 async def force_pin(m: Message):
     if not is_admin(m.from_user.id):
         return await m.answer("Только для владельца.")
@@ -278,7 +277,7 @@ async def force_pin(m: Message):
                    else "Не вышло обновить закреп.")
 
 
-@dp.message(F.text == "📰 Новости сейчас", F.chat.type == "private")
+@dp.message(F.text == "📰 Новости сейчас")
 async def force_news(m: Message):
     if not is_admin(m.from_user.id):
         return await m.answer("Только для владельца.")
@@ -289,7 +288,7 @@ async def force_news(m: Message):
 
 
 # --- ручной курс Сбера ---
-@dp.message(F.text == "🏦 Курс Сбера (ручной)", F.chat.type == "private")
+@dp.message(F.text == "🏦 Курс Сбера (ручной)")
 async def sber_start(m: Message, state: FSMContext):
     if not is_admin(m.from_user.id):
         return await m.answer("Только для владельца.")
@@ -317,7 +316,7 @@ async def sber_values(m: Message, state: FSMContext):
 
 
 # --- сделка: Купить / Продать ---
-@dp.message(F.text == "🟢 Купить", F.chat.type == "private")
+@dp.message(F.text == "🟢 Купить")
 async def buy_start(m: Message, state: FSMContext):
     if not is_admin(m.from_user.id):
         return await m.answer("Только для владельца.")
@@ -326,7 +325,7 @@ async def buy_start(m: Message, state: FSMContext):
     await m.answer("🟢 <b>Покупка.</b> Введи вес в граммах (напр. 12.5). Или «отмена».")
 
 
-@dp.message(F.text == "🔴 Продать", F.chat.type == "private")
+@dp.message(F.text == "🔴 Продать")
 async def sell_start(m: Message, state: FSMContext):
     if not is_admin(m.from_user.id):
         return await m.answer("Только для владельца.")
@@ -390,7 +389,8 @@ async def deal_price(m: Message, state: FSMContext):
 # ---------------- запуск ----------------
 async def main():
     bot = Bot(token=config.TELEGRAM_BOT_TOKEN,
-              default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+              default=DefaultBotProperties(parse_mode=ParseMode.HTML,
+                                           disable_notification=True))   # тихие уведомления везде
     await bot.delete_webhook(drop_pending_updates=True)
     asyncio.create_task(daily_pin_loop(bot))
     asyncio.create_task(news_loop(bot))

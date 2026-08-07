@@ -181,7 +181,7 @@ def _fmt_pct(pct):
     if pct is None:
         return ""
     arrow = "▲" if pct > 0 else ("▼" if pct < 0 else "➡️")
-    return f"  {arrow}{abs(pct):.1f}% за день"
+    return f"  {arrow}{abs(pct):.1f}%"
 
 
 def render_pin(r):
@@ -195,14 +195,14 @@ def render_pin(r):
     g = _fmt_rub(r["gold999"])
     lines.append(f"🥇 999 (ЦБ): <b>{g} ₽/г</b>{_fmt_pct(r['gold999_pct'])}")
     if r["sber_source"]:
-        lines.append(f"🏦 Сбер 999: покупка <b>{_fmt_rub(r['sber_buy999'])}</b> / "
-                     f"продажа <b>{_fmt_rub(r['sber_sell999'])}</b> ₽/г")
-        lines.append(f"🏦 Сбер 585: покупка <b>{_fmt_rub(r['sber_buy585'])}</b> / "
-                     f"продажа <b>{_fmt_rub(r['sber_sell585'])}</b> ₽/г")
+        lines.append(f"🏦 Сбер 999: ↑ <b>{_fmt_rub(r['sber_buy999'])}</b> / "
+                     f"↓ <b>{_fmt_rub(r['sber_sell999'])}</b>")
+        lines.append(f"🏦 Сбер 585: ↑ <b>{_fmt_rub(r['sber_buy585'])}</b> / "
+                     f"↓ <b>{_fmt_rub(r['sber_sell585'])}</b>")
         if r["sber_source"] == "manual":
             lines.append("<i>(Сбер — ручной ввод)</i>")
     else:
-        lines.append("🏦 Сбер: н/д (кнопка «🏦 Курс Сбера»)")
+        lines.append("🏦 Сбер: н/д")
     lines.append(f"<i>Курс на {d} (ЦБ РФ)</i>")
     return "\n".join(lines)
 
