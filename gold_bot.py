@@ -10,7 +10,8 @@
   🏦 Курс Сбера (ручной) — запасной ввод курса Сбера, если автоподтяжка с зеркала не удалась
   📌 Обновить закреп      — пересобрать закреплённое сообщение в группе вручную
   📰 Новости сейчас       — разово запостить свежие новости в группу
-Автоматика: закреп раз в день (config.PIN_HOUR), новости каждые config.NEWS_INTERVAL_HOURS.
+Автоматика: закреп обновляется сам каждые config.PIN_REFRESH_MINUTES (дефолт 30 мин) во всех
+чатах, где он закреплён; новости каждые config.NEWS_INTERVAL_HOURS.
 """
 import asyncio
 import datetime as dt
@@ -163,13 +164,14 @@ async def news_cycle(bot):
 
 
 # ---------------- планировщики ----------------
-async def daily_pin_loop(bot):
+async def pin_loop(bot):
+    """Сам обновляет закреп во всех чатах, где он стоит: сразу после запуска и далее каждые
+    PIN_REFRESH_MINUTES (дефолт 30). Периодический опрос надёжнее «раз в сутки в такой-то час»:
+    перезапуск бота больше не пропускает окно обновления. Если текст не изменился — Telegram
+    вернёт «not modified», update_pin это проглотит, лишних сообщений не будет."""
+    await asyncio.sleep(15)   # дать боту подняться
+    every = max(5, int(getattr(config, "PIN_REFRESH_MINUTES", 30))) * 60
     while True:
-        now = dt.datetime.now()
-        target = now.replace(hour=getattr(config, "PIN_HOUR", 10), minute=0, second=0, microsecond=0)
-        if target <= now:
-            target += dt.timedelta(days=1)
-        await asyncio.sleep((target - now).total_seconds())
         try:
             targets = [int(c) for c in _load_pins().keys()]
             if not targets and getattr(config, "GROUP_CHAT_ID", 0):
@@ -177,7 +179,8 @@ async def daily_pin_loop(bot):
             for chat_id in targets:
                 await update_pin(bot, chat_id)
         except Exception as e:
-            logging.exception("daily_pin_loop: %s", e)
+            logging.exception("pin_loop: %s", e)
+        await asyncio.sleep(every)
 
 
 async def news_loop(bot):
@@ -392,7 +395,7 @@ async def main():
               default=DefaultBotProperties(parse_mode=ParseMode.HTML,
                                            disable_notification=True))   # тихие уведомления везде
     await bot.delete_webhook(drop_pending_updates=True)
-    asyncio.create_task(daily_pin_loop(bot))
+    asyncio.create_task(pin_loop(bot))
     asyncio.create_task(news_loop(bot))
     logging.info("GOLD-BOT v1 запущен")
     await dp.start_polling(bot)
